@@ -13,13 +13,17 @@
 
   <br />
 
+  <a href="https://zsync.eu/zstartup/">
+    <img src="https://img.shields.io/badge/🌐%20Landing%20Page-zsync.eu%2Fzstartup-7c6af7?style=for-the-badge" alt="Landing Page" />
+  </a>
+
   <br /><br />
 
-  <a href="../../releases/latest/download/ZStartup_0.1.0_x64_en-US.msi">
+  <a href="https://zsync.eu/zstartup/releases/ZStartup_0.1.0_x64_en-US.msi">
     <img src="https://img.shields.io/badge/Download-.msi%20Installer-7c6af7?style=for-the-badge&logo=windows&logoColor=white" alt="Download MSI" />
   </a>
   &nbsp;
-  <a href="../../releases/latest/download/ZStartup_0.1.0_x64-setup.exe">
+  <a href="https://zsync.eu/zstartup/releases/ZStartup_0.1.0_x64-setup.exe">
     <img src="https://img.shields.io/badge/Download-NSIS%20Setup-4f46e5?style=for-the-badge&logo=windows&logoColor=white" alt="Download NSIS" />
   </a>
 
@@ -50,7 +54,7 @@ Everything runs inside a clean dark UI with instant search, sorting, and a safe-
 
 ## Screenshots
 
-> _Full pixel-accurate UI preview available on the [landing page](website/index.html)._
+> _Full UI preview and screenshots available at **[zsync.eu/zstartup](https://zsync.eu/zstartup/)**_
 
 The app renders every startup entry in a sortable table with toggle switches, source/scope badges, and per-row action buttons. Broken entries (file doesn't exist on disk) are highlighted with an amber warning indicator.
 
@@ -59,12 +63,12 @@ The app renders every startup entry in a sortable table with toggle switches, so
 ## Installation
 
 ### Option A — MSI Installer *(recommended)*
-1. Download `ZStartup_0.1.0_x64_en-US.msi`
+1. Download `ZStartup_0.1.0_x64_en-US.msi` from [zsync.eu/zstartup](https://zsync.eu/zstartup/)
 2. Run the installer — no extra dependencies needed
 3. Launch ZStartup from the Start Menu
 
 ### Option B — NSIS Setup
-1. Download `ZStartup_0.1.0_x64-setup.exe`
+1. Download `ZStartup_0.1.0_x64-setup.exe` from [zsync.eu/zstartup](https://zsync.eu/zstartup/)
 2. Run the setup wizard
 3. Done
 
@@ -135,14 +139,11 @@ ZStartup/
 │   ├── store/              # Zustand stores (startupStore, uiStore)
 │   ├── lib/                # Tauri command bindings
 │   └── styles/             # Global CSS + design tokens
-├── src-tauri/              # Rust backend
-│   ├── src/
-│   │   └── startup/        # Registry + folder parsing logic
-│   ├── icons/              # App icons (ICO, ICNS, PNG)
-│   └── capabilities/       # Tauri permission config
-└── website/                # Landing page (single index.html)
-    ├── icons/
-    └── releases/
+└── src-tauri/              # Rust backend
+    ├── src/
+    │   └── startup/        # Registry + folder parsing logic
+    ├── icons/              # App icons (ICO, ICNS, PNG)
+    └── capabilities/       # Tauri permission config
 ```
 
 ---
