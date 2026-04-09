@@ -9,6 +9,7 @@
     <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078d4?style=flat-square&logo=windows" alt="platform" />
     <img src="https://img.shields.io/badge/built%20with-Tauri%20v2-24c8db?style=flat-square&logo=tauri" alt="tauri" />
     <img src="https://img.shields.io/badge/license-MIT-22c55e?style=flat-square" alt="license" />
+    <a href="https://github.com/TheHolyOneZ/ZStartup"><img src="https://img.shields.io/badge/GitHub-TheHolyOneZ%2FZStartup-181717?style=flat-square&logo=github" alt="GitHub" /></a>
   </p>
 
   <br />
@@ -150,4 +151,4 @@ ZStartup/
 
 ## License
 
-MIT © 2026 [TheHolyOneZ](https://github.com/TheHolyOneZ)
+MIT © 2026 [TheHolyOneZ](https://github.com/TheHolyOneZ/ZStartup)
