@@ -13,8 +13,6 @@
 
   <br />
 
-  <img src="website/icons/128x128.png" width="560" alt="ZStartup UI preview" />
-
   <br /><br />
 
   <a href="../../releases/latest/download/ZStartup_0.1.0_x64_en-US.msi">
