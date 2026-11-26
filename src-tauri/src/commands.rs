@@ -1,5 +1,5 @@
 use crate::models::{Source, StartupEntry};
-use crate::startup::{folder, registry};
+use crate::startup::{folder, packaged, registry};
 use std::path::Path;
 use tauri::command;
 
@@ -31,9 +31,10 @@ pub fn restart_as_admin() -> Result<(), String> {
 }
 
 #[command]
-pub fn get_startup_entries() -> Vec<StartupEntry> {
+pub async fn get_startup_entries() -> Vec<StartupEntry> {
     let mut entries = registry::read_registry_entries();
     entries.extend(folder::read_folder_entries());
+    entries.extend(packaged::read_packaged_entries());
     entries.sort_by(|a, b| {
         b.enabled
             .cmp(&a.enabled)
@@ -43,28 +44,20 @@ pub fn get_startup_entries() -> Vec<StartupEntry> {
 }
 
 #[command]
-pub fn toggle_entry(
-    source_id: String,
-    name: String,
-    source: Source,
-    enabled: bool,
-) -> Result<(), String> {
+pub fn toggle_entry(source_id: String, key: String, source: Source, enabled: bool) -> Result<(), String> {
     match source {
-        Source::Registry => registry::set_registry_entry_enabled(&source_id, &name, enabled),
-        Source::Folder => folder::set_folder_entry_enabled(&source_id, &name, enabled),
+        Source::Registry => registry::set_registry_entry_enabled(&source_id, &key, enabled),
+        Source::Folder => folder::set_folder_entry_enabled(&source_id, &key, enabled),
+        Source::Packaged => packaged::set_packaged_entry_enabled(&key, enabled),
     }
 }
 
 #[command]
-pub fn delete_entry(
-    source_id: String,
-    name: String,
-    source: Source,
-    enabled: bool,
-) -> Result<(), String> {
+pub fn delete_entry(source_id: String, key: String, source: Source) -> Result<(), String> {
     match source {
-        Source::Registry => registry::delete_registry_entry(&source_id, &name, enabled),
-        Source::Folder => folder::delete_folder_entry(&source_id, &name, enabled),
+        Source::Registry => registry::delete_registry_entry(&source_id, &key),
+        Source::Folder => folder::delete_folder_entry(&source_id, &key),
+        Source::Packaged => Err("Store apps can't be removed from startup. Disable it instead, or uninstall the app.".into()),
     }
 }
 

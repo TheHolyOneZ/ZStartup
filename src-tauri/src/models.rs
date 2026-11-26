@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum Source {
     Registry,
     Folder,
+    Packaged,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -25,6 +26,7 @@ pub enum EntryType {
 pub struct StartupEntry {
     pub id: String,
     pub name: String,
+    pub key: String,
     pub command: String,
     pub exe_path: String,
     pub args: String,

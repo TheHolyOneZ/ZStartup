@@ -5,7 +5,7 @@
   <p><strong>A clean, fast Windows startup manager — built with Tauri + React.</strong></p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-0.1.0-7c6af7?style=flat-square" alt="version" />
+    <img src="https://img.shields.io/badge/version-0.2.0-7c6af7?style=flat-square" alt="version" />
     <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078d4?style=flat-square&logo=windows" alt="platform" />
     <img src="https://img.shields.io/badge/built%20with-Tauri%20v2-24c8db?style=flat-square&logo=tauri" alt="tauri" />
     <img src="https://img.shields.io/badge/license-MIT-22c55e?style=flat-square" alt="license" />
@@ -20,11 +20,11 @@
 
   <br /><br />
 
-  <a href="https://zsync.eu/zstartup/releases/ZStartup_0.1.0_x64_en-US.msi">
+  <a href="https://zsync.eu/zstartup/releases/ZStartup_0.2.0_x64_en-US.msi">
     <img src="https://img.shields.io/badge/Download-.msi%20Installer-7c6af7?style=for-the-badge&logo=windows&logoColor=white" alt="Download MSI" />
   </a>
   &nbsp;
-  <a href="https://zsync.eu/zstartup/releases/ZStartup_0.1.0_x64-setup.exe">
+  <a href="https://zsync.eu/zstartup/releases/ZStartup_0.2.0_x64-setup.exe">
     <img src="https://img.shields.io/badge/Download-NSIS%20Setup-4f46e5?style=for-the-badge&logo=windows&logoColor=white" alt="Download NSIS" />
   </a>
 
@@ -34,7 +34,7 @@
 
 ## What is ZStartup?
 
-ZStartup gives you full control over every program that launches at Windows startup — registry entries and startup folders, for both the current user and all users. No bloat, no telemetry, no bullshit.
+ZStartup gives you full control over every program that launches at Windows startup — registry entries, startup folders and Microsoft Store apps, for both the current user and all users. It uses the same on/off switch as Task Manager, so both always show the same state. No bloat, no telemetry, no bullshit.
 
 Everything runs inside a clean dark UI with instant search, sorting, and a safe-delete undo system so you don't accidentally nuke something important.
 
@@ -44,8 +44,11 @@ Everything runs inside a clean dark UI with instant search, sorting, and a safe-
 
 | | Feature | Description |
 |---|---|---|
-| 🗄️ | **Full Registry Control** | Manages `HKCU` and `HKLM` Run / RunOnce keys in one unified table |
-| 📁 | **Startup Folder Support** | User + system startup folders displayed alongside registry entries |
+| 🗄️ | **Full Registry Control** | Manages `HKCU` and `HKLM` Run / RunOnce keys, including 32-bit programs under `WOW6432Node` |
+| 📁 | **Startup Folder Support** | User + system startup folders, with the real target path of every shortcut |
+| 📦 | **Store Apps** | Microsoft Store / MSIX apps (WhatsApp, Phone Link, Terminal, …) can be switched on and off |
+| 🔄 | **Task Manager Sync** | Enable / disable uses Windows' own `StartupApproved` switch, the same one Task Manager and Settings use |
+| ⚠️ | **Accurate Broken Detection** | Expands `%windir%`-style variables and searches `PATH` before flagging an entry as broken |
 | 🔍 | **Instant Search & Filter** | Filter by source, scope, status (enabled / disabled / broken) |
 | 🗑️ | **Safe Delete with Undo** | 5.5-second undo window via toast notification before the entry is removed |
 | 🛡️ | **Admin Detection** | Auto-detects elevation level, one-click restart as Administrator |
@@ -64,12 +67,12 @@ The app renders every startup entry in a sortable table with toggle switches, so
 ## Installation
 
 ### Option A — MSI Installer *(recommended)*
-1. Download `ZStartup_0.1.0_x64_en-US.msi` from [zsync.eu/zstartup](https://zsync.eu/zstartup/)
+1. Download `ZStartup_0.2.0_x64_en-US.msi` from [zsync.eu/zstartup](https://zsync.eu/zstartup/)
 2. Run the installer — no extra dependencies needed
 3. Launch ZStartup from the Start Menu
 
 ### Option B — NSIS Setup
-1. Download `ZStartup_0.1.0_x64-setup.exe` from [zsync.eu/zstartup](https://zsync.eu/zstartup/)
+1. Download `ZStartup_0.2.0_x64-setup.exe` from [zsync.eu/zstartup](https://zsync.eu/zstartup/)
 2. Run the setup wizard
 3. Done
 
@@ -82,10 +85,20 @@ The app renders every startup entry in a sortable table with toggle switches, so
 1. **Launch the app** — all startup entries load automatically on open
 2. **Toggle entries** — click the switch on any row to enable or disable
 3. **Delete entries** — click the trash icon; you have 5.5 seconds to undo via the toast
-4. **Filter** — use the sidebar to filter by registry, folder, enabled, disabled, broken, user, or system scope
+4. **Filter** — use the sidebar to filter by registry, folder, apps, enabled, disabled, broken, user, or system scope
 5. **Search** — type in the search bar to filter by name, path, or command
 6. **Add entry** — click **+ Add** to register a new startup program
 7. **Refresh** — the app auto-refreshes on window focus, or click the refresh button manually
+
+### What does "Broken" mean?
+
+An entry is marked **Broken** (amber warning icon) when the program it points to does not exist on disk anymore — usually because the program was uninstalled or moved. A broken entry does nothing at startup, so it is safe to delete if you don't use that program anymore. Hover the warning icon to see the exact path that is missing.
+
+If you are unsure about an entry, **disable** it instead of deleting it — you can always switch it back on.
+
+### Store apps
+
+Apps installed from the Microsoft Store (or as MSIX packages) appear with an **App** badge. They can be enabled or disabled like any other entry, but they can't be deleted from startup — uninstall the app instead if you don't want it at all.
 
 ---
 
@@ -142,10 +155,16 @@ ZStartup/
 │   └── styles/             # Global CSS + design tokens
 └── src-tauri/              # Rust backend
     ├── src/
-    │   └── startup/        # Registry + folder parsing logic
+    │   └── startup/        # Registry, folder, Store app + StartupApproved logic
     ├── icons/              # App icons (ICO, ICNS, PNG)
     └── capabilities/       # Tauri permission config
 ```
+
+---
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
 
 ---
 

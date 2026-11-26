@@ -1,6 +1,6 @@
 [package]
 name = "zstartup"
-version = "0.1.0"
+version = "0.2.0"
 description = "ZStartup — Windows startup manager"
 authors = ["TheHolyOneZ"]
 edition = "2021"
@@ -22,6 +22,7 @@ hex = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_Shell"] }
 
 [profile.release]
 panic = "abort"

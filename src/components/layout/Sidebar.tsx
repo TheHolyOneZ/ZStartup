@@ -1,4 +1,4 @@
-import { Database, FolderOpen, ToggleLeft, ToggleRight, Users, User, AlertTriangle, List } from 'lucide-react';
+import { Database, FolderOpen, Package, ToggleLeft, ToggleRight, Users, User, AlertTriangle, List } from 'lucide-react';
 import { useStartupStore, type FilterType } from '@/store/startupStore';
 import { useMemo } from 'react';
 
@@ -6,6 +6,7 @@ const filters: { id: FilterType; label: string; icon: React.ReactNode }[] = [
   { id: 'all',          label: 'All',          icon: <List size={13} /> },
   { id: 'registry',     label: 'Registry',     icon: <Database size={13} /> },
   { id: 'folder',       label: 'Folders',      icon: <FolderOpen size={13} /> },
+  { id: 'packaged',     label: 'Apps',         icon: <Package size={13} /> },
   { id: 'enabled',      label: 'Enabled',      icon: <ToggleRight size={13} /> },
   { id: 'disabled',     label: 'Disabled',     icon: <ToggleLeft size={13} /> },
   { id: 'broken',       label: 'Broken',       icon: <AlertTriangle size={13} /> },
@@ -22,6 +23,7 @@ export function Sidebar() {
     all:          entries.length,
     registry:     entries.filter((e) => e.source === 'registry').length,
     folder:       entries.filter((e) => e.source === 'folder').length,
+    packaged:     entries.filter((e) => e.source === 'packaged').length,
     enabled:      entries.filter((e) => e.enabled).length,
     disabled:     entries.filter((e) => !e.enabled).length,
     broken:       entries.filter((e) => !e.file_exists).length,
@@ -45,7 +47,7 @@ export function Sidebar() {
         const isBroken = f.id === 'broken';
         return (
           <div key={f.id}>
-            {(i === 3 || i === 5 || i === 6) && (
+            {(i === 4 || i === 6 || i === 7) && (
               <div style={{ height: 1, background: 'var(--border)', margin: '6px 10px' }} />
             )}
             <button

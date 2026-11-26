@@ -15,14 +15,19 @@ export function ContextMenu() {
   useEffect(() => {
     if (!ctx) return;
     const close = () => setContextMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
     window.addEventListener('mousedown', close);
-    window.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
-    return () => window.removeEventListener('mousedown', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', onKey);
+    };
   }, [ctx, setContextMenu]);
 
   if (!ctx) return null;
 
   const { entry } = ctx;
+  const isPackaged = entry.source === 'packaged';
 
   
   const menuW = 200, menuH = 200;
@@ -34,7 +39,7 @@ export function ContextMenu() {
     const newEnabled = !entry.enabled;
     updateEntry(entry.id, { enabled: newEnabled });
     try {
-      await toggleEntry(entry.source_id, entry.name, entry.source, newEnabled);
+      await toggleEntry(entry, newEnabled);
       addToast({ type: 'success', message: `${entry.name} ${newEnabled ? 'enabled' : 'disabled'}` });
     } catch (e) {
       updateEntry(entry.id, { enabled: entry.enabled });
@@ -64,7 +69,7 @@ export function ContextMenu() {
     removeEntry(entry.id);
     addToast({ type: 'info', message: `Deleted "${entry.name}"` });
     setTimeout(async () => {
-      try { await deleteEntry(entry.source_id, entry.name, entry.source, entry.enabled); }
+      try { await deleteEntry(entry); }
       catch (e) { addToast({ type: 'error', message: String(e) }); }
     }, 5500);
   };
@@ -76,11 +81,10 @@ export function ContextMenu() {
       action: handleToggle,
     },
     'sep',
-    { icon: <FolderOpen size={13} />, label: 'Open file location', action: handleOpenLocation },
+    ...(isPackaged ? [] : [{ icon: <FolderOpen size={13} />, label: 'Open file location', action: handleOpenLocation }]),
     { icon: <Copy size={13} />, label: 'Copy name', action: handleCopyName },
     { icon: <Copy size={13} />, label: 'Copy command', action: handleCopyPath },
-    'sep',
-    { icon: <Trash2 size={13} />, label: 'Delete', action: handleDelete, danger: true },
+    ...(isPackaged ? [] : ['sep' as const, { icon: <Trash2 size={13} />, label: 'Delete', action: handleDelete, danger: true }]),
   ];
 
   return (

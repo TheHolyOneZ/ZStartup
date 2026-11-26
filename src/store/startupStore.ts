@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { StartupEntry } from '@/lib/tauri';
 
-export type FilterType = 'all' | 'registry' | 'folder' | 'enabled' | 'disabled' | 'broken' | 'current_user' | 'all_users';
+export type FilterType = 'all' | 'registry' | 'folder' | 'packaged' | 'enabled' | 'disabled' | 'broken' | 'current_user' | 'all_users';
 export type SortBy = 'name' | 'source' | 'status' | 'scope';
 
 interface StartupStore {

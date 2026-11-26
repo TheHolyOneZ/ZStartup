@@ -1,194 +1,300 @@
+use super::approved;
+use super::resolve::{expand_env, make_id};
 use crate::models::{EntryType, Scope, Source, StartupEntry};
-use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
+use winreg::enums::*;
+use winreg::RegKey;
 
-fn make_id(source_id: &str, name: &str) -> String {
-    let mut h = Sha256::new();
-    h.update(source_id);
-    h.update(name);
-    hex::encode(h.finalize())[..16].to_string()
+const LEGACY_SUFFIX: &str = ":disabled";
+const STARTUP_SUBPATH: &str = r"Microsoft\Windows\Start Menu\Programs\Startup";
+
+struct Location {
+    id: &'static str,
+    machine: bool,
+    dir: PathBuf,
 }
 
-fn parse_lnk_target(lnk_path: &Path) -> Option<String> {
-    let data = fs::read(lnk_path).ok()?;
-
-    
-    if data.len() < 76 || &data[0..4] != &[0x4C, 0x00, 0x00, 0x00] {
-        return None;
+impl Location {
+    fn hive(&self) -> RegKey {
+        RegKey::predef(if self.machine { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER })
     }
 
-    
-    let link_flags = u32::from_le_bytes(data[0x14..0x18].try_into().ok()?);
-    let has_link_target_id_list = link_flags & 0x01 != 0;
-    let has_link_info = link_flags & 0x02 != 0;
-
-    let mut offset: usize = 76; 
-
-    
-    if has_link_target_id_list {
-        if offset + 2 > data.len() {
-            return None;
-        }
-        let id_list_size = u16::from_le_bytes(data[offset..offset + 2].try_into().ok()?) as usize;
-        offset += 2 + id_list_size;
+    fn legacy_dir(&self) -> PathBuf {
+        self.dir.join("Disabled")
     }
+}
 
-    
-    if has_link_info {
-        if offset + 4 > data.len() {
-            return None;
-        }
-        let link_info_size =
-            u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?) as usize;
-        if offset + link_info_size > data.len() {
-            return None;
-        }
+fn locations() -> Vec<Location> {
+    let mut out = Vec::new();
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        out.push(Location {
+            id: "folder_user",
+            machine: false,
+            dir: PathBuf::from(appdata).join(STARTUP_SUBPATH),
+        });
+    }
+    if let Ok(programdata) = std::env::var("PROGRAMDATA") {
+        out.push(Location {
+            id: "folder_system",
+            machine: true,
+            dir: PathBuf::from(programdata).join(STARTUP_SUBPATH),
+        });
+    }
+    out
+}
 
-        
-        if offset + 0x14 > data.len() {
-            return None;
-        }
-        let local_path_offset =
-            u32::from_le_bytes(data[offset + 0x10..offset + 0x14].try_into().ok()?) as usize;
+fn find(source_id: &str) -> Result<(Location, bool), String> {
+    let (id, legacy) = match source_id.strip_suffix(LEGACY_SUFFIX) {
+        Some(id) => (id, true),
+        None => (source_id, false),
+    };
+    locations()
+        .into_iter()
+        .find(|l| l.id == id)
+        .map(|l| (l, legacy))
+        .ok_or_else(|| format!("Unknown startup folder: {source_id}"))
+}
 
-        if local_path_offset > 0 {
-            let abs_offset = offset + local_path_offset;
-            if abs_offset < data.len() {
-                let end = data[abs_offset..]
-                    .iter()
-                    .position(|&b| b == 0)
-                    .map(|p| abs_offset + p)
-                    .unwrap_or(data.len());
-                if let Ok(path_str) = std::str::from_utf8(&data[abs_offset..end]) {
-                    if !path_str.is_empty() {
-                        return Some(path_str.to_string());
-                    }
-                }
-            }
+fn u16_at(d: &[u8], o: usize) -> Option<u16> {
+    Some(u16::from_le_bytes(d.get(o..o + 2)?.try_into().ok()?))
+}
+
+fn u32_at(d: &[u8], o: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(d.get(o..o + 4)?.try_into().ok()?))
+}
+
+fn cstr_at(d: &[u8], o: usize) -> Option<String> {
+    let bytes = d.get(o..)?;
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    let s = String::from_utf8_lossy(&bytes[..end]).into_owned();
+    (o > 0 && !s.is_empty()).then_some(s)
+}
+
+fn wstr_from(bytes: &[u8]) -> String {
+    let units: Vec<u16> = (0..bytes.len() / 2)
+        .map(|i| u16::from_le_bytes([bytes[2 * i], bytes[2 * i + 1]]))
+        .take_while(|&u| u != 0)
+        .collect();
+    String::from_utf16_lossy(&units)
+}
+
+fn wstr_at(d: &[u8], o: usize) -> Option<String> {
+    let s = wstr_from(d.get(o..)?);
+    (o > 0 && !s.is_empty()).then_some(s)
+}
+
+fn join_path(base: &str, suffix: &str) -> String {
+    if suffix.is_empty() || base.ends_with('\\') {
+        format!("{base}{suffix}")
+    } else {
+        format!(r"{base}\{suffix}")
+    }
+}
+
+fn link_info_path(info: &[u8]) -> Option<String> {
+    let header_size = u32_at(info, 4)? as usize;
+    let flags = u32_at(info, 8)?;
+    let unicode = header_size >= 0x24;
+    let pick = |ansi_field: usize, wide_field: usize| -> Option<String> {
+        let wide = if unicode {
+            u32_at(info, wide_field).and_then(|o| wstr_at(info, o as usize))
+        } else {
+            None
+        };
+        wide.or_else(|| u32_at(info, ansi_field).and_then(|o| cstr_at(info, o as usize)))
+    };
+    let suffix = pick(0x18, 0x20).unwrap_or_default();
+
+    if flags & 0x1 != 0 {
+        if let Some(base) = pick(0x10, 0x1C) {
+            return Some(join_path(&base, &suffix));
         }
     }
-
+    if flags & 0x2 != 0 {
+        let cnrl = info.get(u32_at(info, 0x14)? as usize..)?;
+        let net_offset = u32_at(cnrl, 8)? as usize;
+        let wide = if net_offset > 0x14 {
+            u32_at(cnrl, 0x14).and_then(|o| wstr_at(cnrl, o as usize))
+        } else {
+            None
+        };
+        let net = wide.or_else(|| cstr_at(cnrl, net_offset))?;
+        return Some(join_path(&net, &suffix));
+    }
     None
 }
 
-fn read_startup_folder(folder: &Path, scope: Scope, source_id: &str) -> Vec<StartupEntry> {
-    let mut entries = Vec::new();
-    let disabled_folder = folder.join("Disabled");
+fn read_lnk_string(d: &[u8], off: &mut usize, unicode: bool) -> Option<String> {
+    let count = u16_at(d, *off)? as usize;
+    *off += 2;
+    let len = if unicode { count * 2 } else { count };
+    let bytes = d.get(*off..*off + len)?;
+    *off += len;
+    Some(if unicode {
+        wstr_from(bytes)
+    } else {
+        String::from_utf8_lossy(bytes).into_owned()
+    })
+}
 
-    let read_from = |dir: &Path, enabled: bool, entries: &mut Vec<StartupEntry>| {
-        let Ok(read_dir) = fs::read_dir(dir) else { return };
-        for entry in read_dir.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if ext.eq_ignore_ascii_case("lnk") {
-                let name = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("")
-                    .to_string();
-                if name.is_empty() {
-                    continue;
-                }
+struct Shortcut {
+    targets: Vec<String>,
+    args: String,
+}
 
-                let target = parse_lnk_target(&path).unwrap_or_default();
-                let file_exists = if target.is_empty() {
-                    false
-                } else {
-                    Path::new(&target).exists()
-                };
+fn parse_lnk(d: &[u8], lnk_dir: &Path) -> Option<Shortcut> {
+    if d.len() < 0x4C || d[0..4] != [0x4C, 0, 0, 0] {
+        return None;
+    }
+    let flags = u32_at(d, 0x14)?;
+    let unicode = flags & 0x80 != 0;
+    let mut off = 0x4C;
+    let mut targets = Vec::new();
 
-                let sid = if enabled {
-                    source_id.to_string()
-                } else {
-                    format!("{}_disabled", source_id)
-                };
+    if flags & 0x01 != 0 {
+        off += 2 + u16_at(d, off)? as usize;
+    }
+    if flags & 0x02 != 0 {
+        let size = u32_at(d, off)? as usize;
+        if let Some(path) = d.get(off..off + size).and_then(link_info_path) {
+            targets.push(path);
+        }
+        off += size;
+    }
 
-                entries.push(StartupEntry {
-                    id: make_id(&sid, &name),
-                    name,
-                    command: target.clone(),
-                    exe_path: target,
-                    args: String::new(),
-                    source: Source::Folder,
-                    source_id: source_id.to_string(),
-                    scope: scope.clone(),
-                    enabled,
-                    file_exists,
-                    entry_type: EntryType::Run,
-                });
+    let mut relative = None;
+    let mut args = String::new();
+    for bit in [0x04, 0x08, 0x10, 0x20, 0x40] {
+        if flags & bit == 0 {
+            continue;
+        }
+        let Some(s) = read_lnk_string(d, &mut off, unicode) else { break };
+        match bit {
+            0x08 => relative = Some(s),
+            0x20 => args = s,
+            _ => {}
+        }
+    }
+
+    while let Some(size) = u32_at(d, off).map(|s| s as usize) {
+        if size < 8 {
+            break;
+        }
+        if u32_at(d, off + 4) == Some(0xA000_0001) && size >= 0x314 {
+            let wide = d.get(off + 268..off + 788).map(wstr_from).unwrap_or_default();
+            let target = if wide.is_empty() { cstr_at(d, off + 8).unwrap_or_default() } else { wide };
+            if !target.is_empty() {
+                targets.push(expand_env(&target));
             }
         }
-    };
+        off += size;
+    }
 
-    read_from(folder, true, &mut entries);
-    read_from(&disabled_folder, false, &mut entries);
-    entries
+    if let Some(rel) = relative.filter(|r| !r.is_empty()) {
+        let rel = expand_env(&rel);
+        let path = Path::new(&rel);
+        let joined = if path.is_absolute() { path.to_path_buf() } else { lnk_dir.join(path) };
+        targets.push(joined.to_string_lossy().into_owned());
+    }
+
+    Some(Shortcut { targets, args })
+}
+
+fn read_dir_entries(loc: &Location, legacy: bool, entries: &mut Vec<StartupEntry>) {
+    let dir = if legacy { loc.legacy_dir() } else { loc.dir.clone() };
+    let Ok(read_dir) = fs::read_dir(&dir) else { return };
+    let hive = loc.hive();
+    let source_id = if legacy { format!("{}{LEGACY_SUFFIX}", loc.id) } else { loc.id.to_string() };
+
+    for item in read_dir.filter_map(Result::ok) {
+        let path = item.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(file_name) = path.file_name().and_then(|n| n.to_str()).map(str::to_string) else { continue };
+        if file_name.eq_ignore_ascii_case("desktop.ini") {
+            continue;
+        }
+        let name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&file_name)
+            .to_string();
+        let is_lnk = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("lnk"));
+
+        let (exe_path, args, file_exists) = if is_lnk {
+            let shortcut = fs::read(&path).ok().and_then(|d| parse_lnk(&d, &dir));
+            match shortcut {
+                Some(s) if !s.targets.is_empty() => {
+                    let existing = s.targets.iter().find(|t| Path::new(t).exists()).cloned();
+                    let exists = existing.is_some();
+                    let target = existing.unwrap_or_else(|| s.targets[0].clone());
+                    (target, s.args, exists)
+                }
+                Some(s) => (path.to_string_lossy().into_owned(), s.args, true),
+                None => (path.to_string_lossy().into_owned(), String::new(), true),
+            }
+        } else {
+            (path.to_string_lossy().into_owned(), String::new(), true)
+        };
+
+        let enabled = !legacy && !approved::is_disabled(&hive, approved::STARTUP_FOLDER, &file_name);
+        let command = if args.is_empty() { exe_path.clone() } else { format!("\"{exe_path}\" {args}") };
+
+        entries.push(StartupEntry {
+            id: make_id(&source_id, &file_name),
+            name,
+            key: file_name,
+            command,
+            exe_path,
+            args,
+            source: Source::Folder,
+            source_id: source_id.clone(),
+            scope: if loc.machine { Scope::AllUsers } else { Scope::CurrentUser },
+            enabled,
+            file_exists,
+            entry_type: EntryType::Run,
+        });
+    }
 }
 
 pub fn read_folder_entries() -> Vec<StartupEntry> {
     let mut entries = Vec::new();
-
-    
-    if let Ok(appdata) = std::env::var("APPDATA") {
-        let user_startup = PathBuf::from(appdata)
-            .join(r"Microsoft\Windows\Start Menu\Programs\Startup");
-        entries.extend(read_startup_folder(&user_startup, Scope::CurrentUser, "folder_user"));
+    for loc in locations() {
+        read_dir_entries(&loc, false, &mut entries);
+        read_dir_entries(&loc, true, &mut entries);
     }
-
-    
-    if let Ok(programdata) = std::env::var("PROGRAMDATA") {
-        let system_startup = PathBuf::from(programdata)
-            .join(r"Microsoft\Windows\Start Menu\Programs\Startup");
-        entries.extend(read_startup_folder(&system_startup, Scope::AllUsers, "folder_system"));
-    }
-
     entries
 }
 
-pub fn set_folder_entry_enabled(
-    source_id: &str,
-    name: &str,
-    enabled: bool,
-) -> Result<(), String> {
-    let folder = get_folder_path(source_id)?;
-    let disabled_folder = folder.join("Disabled");
-    let lnk_name = format!("{}.lnk", name);
-
-    if enabled {
-        let from = disabled_folder.join(&lnk_name);
-        let to = folder.join(&lnk_name);
-        fs::rename(&from, &to).map_err(|e| e.to_string())
-    } else {
-        fs::create_dir_all(&disabled_folder).map_err(|e| e.to_string())?;
-        let from = folder.join(&lnk_name);
-        let to = disabled_folder.join(&lnk_name);
-        fs::rename(&from, &to).map_err(|e| e.to_string())
-    }
+fn io_err(e: std::io::Error) -> String {
+    super::resolve::reg_err(e)
 }
 
-pub fn delete_folder_entry(source_id: &str, name: &str, enabled: bool) -> Result<(), String> {
-    let folder = get_folder_path(source_id)?;
-    let lnk_name = format!("{}.lnk", name);
-    let path = if enabled {
-        folder.join(&lnk_name)
-    } else {
-        folder.join("Disabled").join(&lnk_name)
-    };
-    fs::remove_file(&path).map_err(|e| e.to_string())
+pub fn set_folder_entry_enabled(source_id: &str, file_name: &str, enabled: bool) -> Result<(), String> {
+    let (loc, legacy) = find(source_id)?;
+    let hive = loc.hive();
+    if legacy {
+        if !enabled {
+            return Ok(());
+        }
+        fs::rename(loc.legacy_dir().join(file_name), loc.dir.join(file_name)).map_err(io_err)?;
+        let _ = fs::remove_dir(loc.legacy_dir());
+    }
+    approved::set(&hive, approved::STARTUP_FOLDER, file_name, enabled)
 }
 
-fn get_folder_path(source_id: &str) -> Result<PathBuf, String> {
-    match source_id {
-        "folder_user" => {
-            let appdata = std::env::var("APPDATA").map_err(|e| e.to_string())?;
-            Ok(PathBuf::from(appdata).join(r"Microsoft\Windows\Start Menu\Programs\Startup"))
-        }
-        "folder_system" => {
-            let programdata = std::env::var("PROGRAMDATA").map_err(|e| e.to_string())?;
-            Ok(PathBuf::from(programdata)
-                .join(r"Microsoft\Windows\Start Menu\Programs\Startup"))
-        }
-        _ => Err(format!("Unknown folder source_id: {}", source_id)),
+pub fn delete_folder_entry(source_id: &str, file_name: &str) -> Result<(), String> {
+    let (loc, legacy) = find(source_id)?;
+    let dir = if legacy { loc.legacy_dir() } else { loc.dir.clone() };
+    fs::remove_file(dir.join(file_name)).map_err(io_err)?;
+    if legacy {
+        let _ = fs::remove_dir(loc.legacy_dir());
     }
+    approved::remove(&loc.hive(), approved::STARTUP_FOLDER, file_name);
+    Ok(())
 }

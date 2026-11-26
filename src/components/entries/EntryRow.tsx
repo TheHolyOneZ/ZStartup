@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { FolderOpen, Trash2, AlertTriangle, Zap } from 'lucide-react';
 import type { StartupEntry } from '@/lib/tauri';
-import { toggleEntry, openFileLocation } from '@/lib/tauri';
+import { toggleEntry, openFileLocation, sourceBadge, brokenHint } from '@/lib/tauri';
 import { useStartupStore } from '@/store/startupStore';
 import { useUiStore } from '@/store/uiStore';
 
@@ -11,15 +11,6 @@ interface Props {
   zebra: boolean;
 }
 
-const SOURCE_LABELS: Record<string, { label: string; color: string; bg: string }> = {
-  reg_user_run:       { label: 'Reg', color: 'var(--blue)', bg: 'var(--blue-sub)' },
-  reg_system_run:     { label: 'Reg', color: 'var(--blue)', bg: 'var(--blue-sub)' },
-  reg_user_runonce:   { label: 'Once', color: 'var(--accent)', bg: 'var(--accent-sub)' },
-  reg_system_runonce: { label: 'Once', color: 'var(--accent)', bg: 'var(--accent-sub)' },
-  folder_user:        { label: 'Folder', color: 'var(--teal)', bg: 'var(--teal-sub)' },
-  folder_system:      { label: 'Folder', color: 'var(--teal)', bg: 'var(--teal-sub)' },
-};
-
 export function EntryRow({ entry, onDelete, zebra }: Props) {
   const updateEntry = useStartupStore((s) => s.updateEntry);
   const addToast = useUiStore((s) => s.addToast);
@@ -27,7 +18,8 @@ export function EntryRow({ entry, onDelete, zebra }: Props) {
   const [toggling, setToggling] = useState(false);
   const [hovered, setHovered] = useState(false);
 
-  const src = SOURCE_LABELS[entry.source_id] ?? { label: 'Reg', color: 'var(--blue)', bg: 'var(--blue-sub)' };
+  const src = sourceBadge(entry);
+  const isPackaged = entry.source === 'packaged';
   const isSystem = entry.scope === 'all_users';
   const isRunOnce = entry.entry_type === 'run_once';
 
@@ -37,7 +29,7 @@ export function EntryRow({ entry, onDelete, zebra }: Props) {
     const newEnabled = !entry.enabled;
     updateEntry(entry.id, { enabled: newEnabled });
     try {
-      await toggleEntry(entry.source_id, entry.name, entry.source, newEnabled);
+      await toggleEntry(entry, newEnabled);
       addToast({ type: 'success', message: `${entry.name} ${newEnabled ? 'enabled' : 'disabled'}` });
     } catch (e) {
       updateEntry(entry.id, { enabled: entry.enabled });
@@ -93,7 +85,9 @@ export function EntryRow({ entry, onDelete, zebra }: Props) {
       
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
         {!entry.file_exists && (
-          <AlertTriangle size={12} color="var(--amber)" style={{ flexShrink: 0 }} />
+          <span title={brokenHint(entry)} style={{ display: 'flex' }}>
+            <AlertTriangle size={12} color="var(--amber)" style={{ flexShrink: 0 }} />
+          </span>
         )}
         {isRunOnce && (
           <span title="RunOnce — runs once on next boot then removes itself">
@@ -111,7 +105,7 @@ export function EntryRow({ entry, onDelete, zebra }: Props) {
 
       
       <div
-        title={entry.exe_path}
+        title={entry.command}
         style={{
           fontSize: 11, color: 'var(--text-dim)',
           fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -146,7 +140,7 @@ export function EntryRow({ entry, onDelete, zebra }: Props) {
 
       
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end', opacity: hovered ? 1 : 0, transition: 'opacity 100ms' }}>
-        <button
+        {!isPackaged && <button
           onClick={() => openFileLocation(entry.exe_path)}
           title="Open file location"
           onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--text)')}
@@ -154,8 +148,8 @@ export function EntryRow({ entry, onDelete, zebra }: Props) {
           style={{ color: 'var(--text-muted)', padding: 4, borderRadius: 4, transition: 'color 100ms, background 100ms' }}
         >
           <FolderOpen size={14} />
-        </button>
-        <button
+        </button>}
+        {!isPackaged && <button
           onClick={() => onDelete(entry)}
           title="Delete"
           onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--red)'; e.currentTarget.style.background = 'var(--red-sub)'; }}
@@ -163,7 +157,7 @@ export function EntryRow({ entry, onDelete, zebra }: Props) {
           style={{ color: 'var(--text-muted)', padding: 4, borderRadius: 4, transition: 'color 100ms, background 100ms' }}
         >
           <Trash2 size={14} />
-        </button>
+        </button>}
       </div>
     </div>
   );

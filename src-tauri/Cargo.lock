@@ -5159,7 +5159,7 @@ checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
 
 [[package]]
 name = "zstartup"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "hex",
  "serde",
@@ -5168,5 +5168,6 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-shell",
+ "windows-sys 0.59.0",
  "winreg 0.52.0",
 ]

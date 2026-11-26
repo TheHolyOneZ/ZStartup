@@ -1,252 +1,181 @@
+use super::approved;
+use super::resolve::{make_id, reg_err, resolve_command};
 use crate::models::{EntryType, Scope, Source, StartupEntry};
-use sha2::{Digest, Sha256};
-use std::path::Path;
 use winreg::enums::*;
-use winreg::RegKey;
+use winreg::{RegKey, RegValue};
 
-fn make_id(source_id: &str, name: &str) -> String {
-    let mut h = Sha256::new();
-    h.update(source_id);
-    h.update(name);
-    hex::encode(h.finalize())[..16].to_string()
-}
+const LEGACY_SUFFIX: &str = ":disabled";
 
-fn parse_exe(command: &str) -> (String, String) {
-    let cmd = command.trim();
-    
-    if cmd.starts_with('"') {
-        if let Some(end) = cmd[1..].find('"') {
-            let exe = cmd[1..end + 1].to_string();
-            let args = cmd[end + 2..].trim().to_string();
-            return (exe, args);
-        }
-    }
-    
-    if let Some(sp) = cmd.find(' ') {
-        (cmd[..sp].to_string(), cmd[sp + 1..].trim().to_string())
-    } else {
-        (cmd.to_string(), String::new())
-    }
-}
-
-fn read_run_key(
-    hive: RegKey,
-    key_path: &str,
-    disabled_key_path: &str,
-    scope: Scope,
+struct RunKey {
+    id: &'static str,
+    machine: bool,
+    path: &'static str,
+    approved: Option<&'static str>,
     entry_type: EntryType,
-    source_id: &str,
-    entries: &mut Vec<StartupEntry>,
-) {
-    
-    if let Ok(key) = hive.open_subkey(key_path) {
-        for value in key.enum_values().filter_map(|v| v.ok()) {
-            let name = value.0;
-            let command: String = value.1.to_string();
-            let (exe_path, args) = parse_exe(&command);
-            let file_exists = Path::new(&exe_path).exists();
-            entries.push(StartupEntry {
-                id: make_id(source_id, &name),
-                name,
-                command,
-                exe_path,
-                args,
-                source: Source::Registry,
-                source_id: source_id.to_string(),
-                scope: scope.clone(),
-                enabled: true,
-                file_exists,
-                entry_type: entry_type.clone(),
-            });
-        }
+}
+
+impl RunKey {
+    fn hive(&self) -> RegKey {
+        RegKey::predef(if self.machine { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER })
     }
 
-    
-    let disabled_path = format!("{}\\Disabled", key_path);
-    if let Ok(dis_key) = hive.open_subkey(&disabled_path) {
-        for value in dis_key.enum_values().filter_map(|v| v.ok()) {
-            let name = value.0;
-            let command: String = value.1.to_string();
-            let (exe_path, args) = parse_exe(&command);
-            let file_exists = Path::new(&exe_path).exists();
-            let sid = format!("{}_disabled", source_id);
-            entries.push(StartupEntry {
-                id: make_id(&sid, &name),
-                name,
-                command,
-                exe_path,
-                args,
-                source: Source::Registry,
-                source_id: source_id.to_string(),
-                scope: scope.clone(),
-                enabled: false,
-                file_exists,
-                entry_type: entry_type.clone(),
-            });
-        }
+    fn legacy_path(&self) -> String {
+        format!(r"{}\Disabled", self.path)
     }
-    let _ = disabled_key_path;
+
+    fn scope(&self) -> Scope {
+        if self.machine { Scope::AllUsers } else { Scope::CurrentUser }
+    }
+}
+
+fn run_keys() -> [RunKey; 6] {
+    const RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+    const RUN_ONCE: &str = r"Software\Microsoft\Windows\CurrentVersion\RunOnce";
+    const RUN_32: &str = r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run";
+    const RUN_ONCE_32: &str = r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce";
+    [
+        RunKey { id: "reg_user_run", machine: false, path: RUN, approved: Some(approved::RUN), entry_type: EntryType::Run },
+        RunKey { id: "reg_user_runonce", machine: false, path: RUN_ONCE, approved: None, entry_type: EntryType::RunOnce },
+        RunKey { id: "reg_system_run", machine: true, path: RUN, approved: Some(approved::RUN), entry_type: EntryType::Run },
+        RunKey { id: "reg_system_runonce", machine: true, path: RUN_ONCE, approved: None, entry_type: EntryType::RunOnce },
+        RunKey { id: "reg_system_run32", machine: true, path: RUN_32, approved: Some(approved::RUN32), entry_type: EntryType::Run },
+        RunKey { id: "reg_system_runonce32", machine: true, path: RUN_ONCE_32, approved: None, entry_type: EntryType::RunOnce },
+    ]
+}
+
+fn find(source_id: &str) -> Result<(RunKey, bool), String> {
+    let (id, legacy) = match source_id.strip_suffix(LEGACY_SUFFIX) {
+        Some(id) => (id, true),
+        None => (source_id, false),
+    };
+    run_keys()
+        .into_iter()
+        .find(|k| k.id == id)
+        .map(|k| (k, legacy))
+        .ok_or_else(|| format!("Unknown source: {source_id}"))
+}
+
+fn make_entry(k: &RunKey, name: String, value: &RegValue, enabled: bool, legacy: bool) -> StartupEntry {
+    let command = value.to_string();
+    let r = resolve_command(&command);
+    let source_id = if legacy { format!("{}{LEGACY_SUFFIX}", k.id) } else { k.id.to_string() };
+    StartupEntry {
+        id: make_id(&source_id, &name),
+        key: name.clone(),
+        name,
+        command,
+        exe_path: r.exe_path,
+        args: r.args,
+        source: Source::Registry,
+        source_id,
+        scope: k.scope(),
+        enabled,
+        file_exists: r.exists,
+        entry_type: k.entry_type.clone(),
+    }
 }
 
 pub fn read_registry_entries() -> Vec<StartupEntry> {
     let mut entries = Vec::new();
-
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-
-    
-    read_run_key(
-        RegKey::predef(HKEY_CURRENT_USER),
-        r"Software\Microsoft\Windows\CurrentVersion\Run",
-        "",
-        Scope::CurrentUser,
-        EntryType::Run,
-        "reg_user_run",
-        &mut entries,
-    );
-
-    
-    read_run_key(
-        RegKey::predef(HKEY_CURRENT_USER),
-        r"Software\Microsoft\Windows\CurrentVersion\RunOnce",
-        "",
-        Scope::CurrentUser,
-        EntryType::RunOnce,
-        "reg_user_runonce",
-        &mut entries,
-    );
-
-    
-    read_run_key(
-        RegKey::predef(HKEY_LOCAL_MACHINE),
-        r"Software\Microsoft\Windows\CurrentVersion\Run",
-        "",
-        Scope::AllUsers,
-        EntryType::Run,
-        "reg_system_run",
-        &mut entries,
-    );
-
-    
-    read_run_key(
-        RegKey::predef(HKEY_LOCAL_MACHINE),
-        r"Software\Microsoft\Windows\CurrentVersion\RunOnce",
-        "",
-        Scope::AllUsers,
-        EntryType::RunOnce,
-        "reg_system_runonce",
-        &mut entries,
-    );
-
-    let _ = hkcu;
-    let _ = hklm;
+    for k in run_keys() {
+        let hive = k.hive();
+        if let Ok(key) = hive.open_subkey(k.path) {
+            for (name, value) in key.enum_values().filter_map(Result::ok) {
+                if name.is_empty() && value.bytes.len() <= 2 {
+                    continue;
+                }
+                let enabled = k
+                    .approved
+                    .is_none_or(|list| !approved::is_disabled(&hive, list, &name));
+                entries.push(make_entry(&k, name, &value, enabled, false));
+            }
+        }
+        if let Ok(key) = hive.open_subkey(k.legacy_path()) {
+            for (name, value) in key.enum_values().filter_map(Result::ok) {
+                entries.push(make_entry(&k, name, &value, false, true));
+            }
+        }
+    }
     entries
 }
 
-pub fn set_registry_entry_enabled(
-    source_id: &str,
-    name: &str,
-    enabled: bool,
-) -> Result<(), String> {
-    let (hive_predef, key_path) = match source_id {
-        "reg_user_run" => (
-            HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\Run",
-        ),
-        "reg_user_runonce" => (
-            HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\RunOnce",
-        ),
-        "reg_system_run" => (
-            HKEY_LOCAL_MACHINE,
-            r"Software\Microsoft\Windows\CurrentVersion\Run",
-        ),
-        "reg_system_runonce" => (
-            HKEY_LOCAL_MACHINE,
-            r"Software\Microsoft\Windows\CurrentVersion\RunOnce",
-        ),
-        _ => return Err(format!("Unknown source_id: {}", source_id)),
-    };
+fn move_value(hive: &RegKey, from: &str, to: &str, name: &str) -> Result<(), String> {
+    let src = hive
+        .open_subkey_with_flags(from, KEY_READ | KEY_SET_VALUE)
+        .map_err(reg_err)?;
+    let value = src.get_raw_value(name).map_err(reg_err)?;
+    let (dst, _) = hive.create_subkey(to).map_err(reg_err)?;
+    dst.set_raw_value(name, &value).map_err(reg_err)?;
+    src.delete_value(name).map_err(reg_err)
+}
 
-    let hive = RegKey::predef(hive_predef);
-    let disabled_path = format!("{}\\Disabled", key_path);
+fn drop_if_empty(hive: &RegKey, path: &str) {
+    let empty = hive
+        .open_subkey(path)
+        .and_then(|k| k.query_info())
+        .is_ok_and(|info| info.values == 0 && info.sub_keys == 0);
+    if empty {
+        let _ = hive.delete_subkey(path);
+    }
+}
 
-    if enabled {
-        
-        let dis_key = hive
-            .open_subkey_with_flags(&disabled_path, KEY_READ | KEY_WRITE)
-            .map_err(|e| e.to_string())?;
-        let value: String = dis_key.get_value(name).map_err(|e| e.to_string())?;
-        dis_key.delete_value(name).map_err(|e| e.to_string())?;
-        let run_key = hive
-            .open_subkey_with_flags(key_path, KEY_WRITE)
-            .map_err(|e| e.to_string())?;
-        run_key.set_value(name, &value).map_err(|e| e.to_string())?;
-    } else {
-        
-        let run_key = hive
-            .open_subkey_with_flags(key_path, KEY_READ | KEY_WRITE)
-            .map_err(|e| e.to_string())?;
-        let value: String = run_key.get_value(name).map_err(|e| e.to_string())?;
-        run_key.delete_value(name).map_err(|e| e.to_string())?;
-        let (dis_key, _) = hive
-            .create_subkey(&disabled_path)
-            .map_err(|e| e.to_string())?;
-        dis_key
-            .set_value(name, &value)
-            .map_err(|e| e.to_string())?;
+pub fn set_registry_entry_enabled(source_id: &str, name: &str, enabled: bool) -> Result<(), String> {
+    let (k, legacy) = find(source_id)?;
+    let hive = k.hive();
+    let legacy_path = k.legacy_path();
+
+    if legacy {
+        if !enabled {
+            return Ok(());
+        }
+        move_value(&hive, &legacy_path, k.path, name)?;
+        drop_if_empty(&hive, &legacy_path);
+        return match k.approved {
+            Some(list) => approved::set(&hive, list, name, true),
+            None => Ok(()),
+        };
+    }
+
+    match k.approved {
+        Some(list) => approved::set(&hive, list, name, enabled),
+        None if enabled => Ok(()),
+        None => move_value(&hive, k.path, &legacy_path, name),
+    }
+}
+
+pub fn delete_registry_entry(source_id: &str, name: &str) -> Result<(), String> {
+    let (k, legacy) = find(source_id)?;
+    let hive = k.hive();
+    let path = if legacy { k.legacy_path() } else { k.path.to_string() };
+    let key = hive
+        .open_subkey_with_flags(&path, KEY_SET_VALUE)
+        .map_err(reg_err)?;
+    key.delete_value(name).map_err(reg_err)?;
+    if legacy {
+        drop_if_empty(&hive, &path);
+    }
+    if let Some(list) = k.approved {
+        approved::remove(&hive, list, name);
     }
     Ok(())
 }
 
-pub fn delete_registry_entry(source_id: &str, name: &str, enabled: bool) -> Result<(), String> {
-    let (hive_predef, key_path) = match source_id {
-        "reg_user_run" => (
-            HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\Run",
-        ),
-        "reg_user_runonce" => (
-            HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\RunOnce",
-        ),
-        "reg_system_run" => (
-            HKEY_LOCAL_MACHINE,
-            r"Software\Microsoft\Windows\CurrentVersion\Run",
-        ),
-        "reg_system_runonce" => (
-            HKEY_LOCAL_MACHINE,
-            r"Software\Microsoft\Windows\CurrentVersion\RunOnce",
-        ),
-        _ => return Err(format!("Unknown source_id: {}", source_id)),
-    };
-
-    let hive = RegKey::predef(hive_predef);
-    let target_path = if enabled {
-        key_path.to_string()
-    } else {
-        format!("{}\\Disabled", key_path)
-    };
-    let key = hive
-        .open_subkey_with_flags(&target_path, KEY_WRITE)
-        .map_err(|e| e.to_string())?;
-    key.delete_value(name).map_err(|e| e.to_string())
-}
-
 pub fn add_registry_entry(name: &str, command: &str, scope: &str) -> Result<(), String> {
-    let (hive_predef, key_path) = match scope {
-        "all_users" => (
-            HKEY_LOCAL_MACHINE,
-            r"Software\Microsoft\Windows\CurrentVersion\Run",
-        ),
-        _ => (
-            HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\Run",
-        ),
-    };
-    let hive = RegKey::predef(hive_predef);
-    let key = hive
-        .open_subkey_with_flags(key_path, KEY_WRITE)
-        .map_err(|e| e.to_string())?;
-    key.set_value(name, &command.to_string())
-        .map_err(|e| e.to_string())
+    let k = run_keys()
+        .into_iter()
+        .find(|k| k.id == if scope == "all_users" { "reg_system_run" } else { "reg_user_run" })
+        .ok_or("Unknown scope")?;
+    let hive = k.hive();
+    let (key, _) = hive.create_subkey(k.path).map_err(reg_err)?;
+    let bytes = command
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    let vtype = if command.contains('%') { REG_EXPAND_SZ } else { REG_SZ };
+    key.set_raw_value(name, &RegValue { bytes, vtype }).map_err(reg_err)?;
+    if let Some(list) = k.approved {
+        approved::remove(&hive, list, name);
+    }
+    Ok(())
 }

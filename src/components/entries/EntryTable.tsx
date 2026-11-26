@@ -36,6 +36,7 @@ export function EntryTable() {
     switch (filter) {
       case 'registry':     list = list.filter((e) => e.source === 'registry'); break;
       case 'folder':       list = list.filter((e) => e.source === 'folder'); break;
+      case 'packaged':     list = list.filter((e) => e.source === 'packaged'); break;
       case 'enabled':      list = list.filter((e) => e.enabled); break;
       case 'disabled':     list = list.filter((e) => !e.enabled); break;
       case 'broken':       list = list.filter((e) => !e.file_exists); break;
@@ -75,7 +76,7 @@ export function EntryTable() {
 
     const timer = setTimeout(async () => {
       try {
-        await deleteEntry(entry.source_id, entry.name, entry.source, entry.enabled);
+        await deleteEntry(entry);
       } catch (e) {
         addToast({ type: 'error', message: String(e) });
       }
